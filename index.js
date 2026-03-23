@@ -18,6 +18,13 @@ app.get("/", (req, res) => {
 });
 
 app.get("/jobs", (req, res) => {
+  const { status } = req.query;
+
+  if (status) {
+    const filteredJobs = jobs.filter((job) => job.status === status);
+    return res.json(filteredJobs);
+  }
+
   res.json(jobs);
 });
 
@@ -26,11 +33,16 @@ app.get("/test", (req, res) => {
 });
 
 app.post("/jobs", (req, res) => {
-  const { title, company } = req.body;
+  const { title, company, status } = req.body;
+  const allowedStatus = ["applied", "interview", "rejected"];
+
+  if (status && !allowedStatus.includes(status)) {
+    return res.status(400).json({ error: "Invalid status" });
+  }
 
   if (!title || !company) {
-    return res.json({
-      message: "Title and company are required",
+    return res.status(400).json({
+      error: "Title and company are required",
     });
   }
 
@@ -38,6 +50,7 @@ app.post("/jobs", (req, res) => {
     id: Date.now(),
     title,
     company,
+    status: status || "applied",
   };
 
   jobs.push(newJob);
