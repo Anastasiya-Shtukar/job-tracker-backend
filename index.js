@@ -7,8 +7,13 @@ app.use(cors());
 app.use(express.json());
 
 let jobs = [
-  { id: 1, title: "Frontend developer", company: "Google" },
-  { id: 2, title: "Backend developer", company: "Amazon" },
+  {
+    id: 1,
+    title: "Frontend developer",
+    company: "Google",
+    status: "interview",
+  },
+  { id: 2, title: "Backend developer", company: "Amazon", status: "rejected" },
 ];
 
 const allowedStatus = ["applied", "interview", "rejected"];
