@@ -12,13 +12,22 @@ let jobs = [
     title: "Frontend developer",
     company: "Google",
     status: "interview",
+    details: "Warszawa",
   },
-  { id: 2, title: "Backend developer", company: "Amazon", status: "rejected" },
+  {
+    id: 2,
+    title: "Backend developer",
+    company: "Amazon",
+    status: "rejected",
+    details: "Warszawa",
+  },
 ];
 
 const allowedStatus = ["applied", "interview", "rejected"];
+const allowedFields = ["title", "company", "status", "details"];
 
-let message = { message: "Backend works" };
+const normalizeString = (value) =>
+  typeof value === "string" ? value.trim() : "";
 
 app.get("/", (req, res) => {
   res.send("API is running");
@@ -35,18 +44,18 @@ app.get("/jobs", (req, res) => {
   res.json(jobs);
 });
 
-app.get("/test", (req, res) => {
-  res.json(message);
-});
-
 app.post("/jobs", (req, res) => {
-  const { title, company, status } = req.body;
+  const { title, company, status, details } = req.body;
+
+  const normalizedCompany = normalizeString(company);
+  const normalizedDetails = normalizeString(details);
+  const normalizedTitle = normalizeString(title);
 
   if (status && !allowedStatus.includes(status)) {
     return res.status(400).json({ error: "Invalid status" });
   }
 
-  if (!title || !company) {
+  if (!normalizedTitle || !normalizedCompany) {
     return res.status(400).json({
       error: "Title and company are required",
     });
@@ -54,9 +63,10 @@ app.post("/jobs", (req, res) => {
 
   const newJob = {
     id: Date.now(),
-    title,
-    company,
+    title: normalizedTitle,
+    company: normalizedCompany,
     status: status || "applied",
+    details: normalizedDetails,
   };
 
   jobs.push(newJob);
@@ -81,8 +91,7 @@ app.patch("/jobs/:id", (req, res) => {
   const id = Number(req.params.id);
   const updates = req.body;
   const job = jobs.find((job) => job.id === id);
-  const allowedFields = ["title", "company", "status"];
-  const incomingFields = Object.keys(req.body);
+  const incomingFields = Object.keys(updates);
   const index = jobs.findIndex((job) => job.id === id);
 
   if (!job) {
@@ -107,15 +116,41 @@ app.patch("/jobs/:id", (req, res) => {
     });
   }
 
-  if (updates.status && !allowedStatus.includes(updates.status)) {
-    return res.status(400).json({
-      error: "invalid status",
-    });
+  const normalizedUpdates = {};
+
+  if ("status" in updates) {
+    if (!allowedStatus.includes(updates.status)) {
+      return res.status(400).json({
+        error: "invalid status",
+      });
+    }
+    normalizedUpdates.status = updates.status;
+  }
+
+  if ("title" in updates) {
+    if (typeof updates.title !== "string" || !updates.title.trim()) {
+      return res.status(400).json({ error: "Title is required" });
+    }
+    normalizedUpdates.title = normalizeString(updates.title);
+  }
+
+  if ("company" in updates) {
+    if (typeof updates.company !== "string" || !updates.company.trim()) {
+      return res.status(400).json({ error: "Company is required" });
+    }
+    normalizedUpdates.company = normalizeString(updates.company);
+  }
+
+  if ("details" in updates) {
+    if (typeof updates.details !== "string") {
+      return res.status(400).json({ error: "Details must be a string" });
+    }
+    normalizedUpdates.details = normalizeString(updates.details);
   }
 
   const updatedJob = {
     ...job,
-    ...req.body,
+    ...normalizedUpdates,
   };
 
   jobs[index] = updatedJob;
