@@ -1,5 +1,7 @@
 const express = require("express");
 const cors = require("cors");
+require("dotenv").config();
+const OpenAI = require("openai");
 
 const app = express();
 
@@ -156,6 +158,44 @@ app.patch("/jobs/:id", (req, res) => {
   jobs[index] = updatedJob;
 
   return res.json(updatedJob);
+});
+
+const client = new OpenAI({
+  apiKey: process.env.OPENAI_API_KEY,
+});
+
+app.post("/ai/suggest-details", async (req, res) => {
+  const { details } = req.body;
+  const normalizedDetails = normalizeString(details);
+  if (!normalizedDetails) {
+    return res.status(400).json({ error: "Empty request" });
+  }
+
+  try {
+    const response = await client.responses.create({
+      model: "gpt-4.1-mini",
+      input: `Rewrite and shorten this job details. 
+Do not add new facts. Return 1-2 sentences.
+
+Text:
+${normalizedDetails}`,
+    });
+
+    const suggestion = response.output_text;
+
+    if (!suggestion.trim()) {
+      return res.status(500).json({
+        error: "Failed to generate suggestion",
+      });
+    }
+
+    return res.json({ suggestion });
+  } catch (error) {
+    console.error("OpenAI error:", error);
+    return res.status(500).json({
+      error: "Failed to generate suggestion",
+    });
+  }
 });
 
 app.listen(3000, () => {
