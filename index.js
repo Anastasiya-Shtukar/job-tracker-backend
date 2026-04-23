@@ -2,28 +2,12 @@ const express = require("express");
 const cors = require("cors");
 require("dotenv").config();
 const OpenAI = require("openai");
+const pool = require("./db.js");
 
 const app = express();
 
 app.use(cors());
 app.use(express.json());
-
-let jobs = [
-  {
-    id: 1,
-    title: "Frontend developer",
-    company: "Google",
-    status: "interview",
-    details: "Warszawa",
-  },
-  {
-    id: 2,
-    title: "Backend developer",
-    company: "Amazon",
-    status: "rejected",
-    details: "Warszawa",
-  },
-];
 
 const allowedStatus = ["applied", "interview", "rejected"];
 const allowedFields = ["title", "company", "status", "details"];
@@ -35,25 +19,25 @@ app.get("/", (req, res) => {
   res.send("API is running");
 });
 
-app.get("/jobs", (req, res) => {
-  const { status } = req.query;
-
-  if (status) {
-    const filteredJobs = jobs.filter((job) => job.status === status);
-    return res.json(filteredJobs);
+app.get("/jobs", async (req, res) => {
+  try {
+    const result = await pool.query("SELECT * FROM jobs");
+    res.json(result.rows);
+  } catch (error) {
+    console.error(error);
+    res.status(500).json({ error: "Failed to fetch jobs" });
   }
-
-  res.json(jobs);
 });
 
-app.post("/jobs", (req, res) => {
+app.post("/jobs", async (req, res) => {
   const { title, company, status, details } = req.body;
 
   const normalizedCompany = normalizeString(company);
   const normalizedDetails = normalizeString(details);
   const normalizedTitle = normalizeString(title);
+  const finalStatus = status || "applied";
 
-  if (status && !allowedStatus.includes(status)) {
+  if (finalStatus && !allowedStatus.includes(finalStatus)) {
     return res.status(400).json({ error: "Invalid status" });
   }
 
@@ -63,44 +47,45 @@ app.post("/jobs", (req, res) => {
     });
   }
 
-  const newJob = {
-    id: Date.now(),
-    title: normalizedTitle,
-    company: normalizedCompany,
-    status: status || "applied",
-    details: normalizedDetails,
-  };
-
-  jobs.push(newJob);
-
-  res.json({
-    message: "Job added",
-    job: newJob,
-  });
+  try {
+    const result = await pool.query(
+      `INSERT INTO jobs (title, company, status, details)
+VALUES ($1, $2, $3, $4)
+RETURNING *;`,
+      [normalizedTitle, normalizedCompany, finalStatus, normalizedDetails],
+    );
+    res.status(201).json({ job: result.rows[0] });
+  } catch (error) {
+    console.error(error);
+    res.status(500).json({ error: "Failed to add job" });
+  }
 });
 
-app.delete("/jobs/:id", (req, res) => {
+app.delete("/jobs/:id", async (req, res) => {
   const id = Number(req.params.id);
 
-  jobs = jobs.filter((job) => job.id !== id);
+  try {
+    const result = await pool.query(
+      `DELETE FROM jobs
+WHERE id = $1
+RETURNING *;`,
+      [id],
+    );
 
-  res.json({
-    message: "Job deleted",
-  });
+    if (result.rows.length === 0) {
+      return res.status(404).json({ error: "Job not found" });
+    } else {
+      return res.status(200).json({ message: "Job deleted" });
+    }
+  } catch (error) {
+    res.status(500).json({ error: "Failed to delete job" });
+  }
 });
 
-app.patch("/jobs/:id", (req, res) => {
+app.patch("/jobs/:id", async (req, res) => {
   const id = Number(req.params.id);
   const updates = req.body;
-  const job = jobs.find((job) => job.id === id);
   const incomingFields = Object.keys(updates);
-  const index = jobs.findIndex((job) => job.id === id);
-
-  if (!job) {
-    return res.status(404).json({
-      error: "Not Found",
-    });
-  }
 
   if (incomingFields.length === 0) {
     return res.status(400).json({
@@ -150,14 +135,27 @@ app.patch("/jobs/:id", (req, res) => {
     normalizedUpdates.details = normalizeString(updates.details);
   }
 
-  const updatedJob = {
-    ...job,
-    ...normalizedUpdates,
-  };
+  const entries = Object.entries(normalizedUpdates);
+  const setClauses = entries.map(([key], index) => `${key} = $${index + 1}`);
+  const values = entries.map(([, value]) => value);
 
-  jobs[index] = updatedJob;
+  try {
+    const result = await pool.query(
+      `UPDATE jobs
+SET ${setClauses.join(", ")},
+    updated_at = NOW()
+WHERE id = $${values.length + 1}
+RETURNING *;`,
+      [...values, id],
+    );
 
-  return res.json(updatedJob);
+    if (result.rows.length === 0) {
+      return res.status(404).json({ error: "Job not found" });
+    }
+    return res.status(200).json(result.rows[0]);
+  } catch (error) {
+    res.status(500).json({ error: "Failed to update job" });
+  }
 });
 
 const client = new OpenAI({
