@@ -314,7 +314,7 @@ http://localhost:3000
 The frontend should use this backend through:
 
 ```env
-VITE_API_URL=https://job-tracker-backend-ch5u.onrender.com
+VITE_API_URL=http://localhost:3000
 ```
 
 For production deployment, replace it with your deployed backend URL.

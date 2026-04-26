@@ -15,6 +15,18 @@ const allowedFields = ["title", "company", "status", "details"];
 const normalizeString = (value) =>
   typeof value === "string" ? value.trim() : "";
 
+const normalizeUrl = (value) => {
+  const trimmed = normalizeString(value);
+
+  if (!trimmed) return "";
+
+  if (trimmed.startsWith("http://") || trimmed.startsWith("https://")) {
+    return trimmed;
+  }
+
+  return `https://${trimmed}`;
+};
+
 app.get("/", (req, res) => {
   res.send("API is running");
 });
@@ -30,29 +42,37 @@ app.get("/jobs", async (req, res) => {
 });
 
 app.post("/jobs", async (req, res) => {
-  const { title, company, status, details } = req.body;
+  const { title, company, status, details, job_url } = req.body;
 
   const normalizedCompany = normalizeString(company);
   const normalizedDetails = normalizeString(details);
   const normalizedTitle = normalizeString(title);
   const finalStatus = status || "applied";
 
+  const finalUrl = normalizeUrl(job_url);
+
   if (finalStatus && !allowedStatus.includes(finalStatus)) {
     return res.status(400).json({ error: "Invalid status" });
   }
 
-  if (!normalizedTitle || !normalizedCompany) {
+  if (!normalizedTitle || !normalizedCompany || !finalUrl) {
     return res.status(400).json({
-      error: "Title and company are required",
+      error: "Title, company and job URL are required",
     });
   }
 
   try {
     const result = await pool.query(
-      `INSERT INTO jobs (title, company, status, details)
-VALUES ($1, $2, $3, $4)
+      `INSERT INTO jobs (title, company, status, details, job_url)
+VALUES ($1, $2, $3, $4, $5)
 RETURNING *;`,
-      [normalizedTitle, normalizedCompany, finalStatus, normalizedDetails],
+      [
+        normalizedTitle,
+        normalizedCompany,
+        finalStatus,
+        normalizedDetails,
+        finalUrl,
+      ],
     );
     res.status(201).json({ job: result.rows[0] });
   } catch (error) {
@@ -192,6 +212,77 @@ ${normalizedDetails}`,
     console.error("OpenAI error:", error);
     return res.status(500).json({
       error: "Failed to generate suggestion",
+    });
+  }
+});
+
+app.post("/ai/extract-job", async (req, res) => {
+  const { text } = req.body;
+  console.log(text);
+  const normalizedText = normalizeString(text);
+  console.log(normalizedText);
+  const prompt = `
+You are extracting job posting data for a job tracking app.
+
+Analyze the text and return structured data.
+
+Important rules:
+- Detect the language of the input text.
+- Return all values in the same language as the input text.
+- Do not translate the content to English unless the input is in English.
+- Do not invent missing information.
+- If a field is missing or unclear, use an empty string.
+- Keep "details" concise and useful for a user tracking job applications.
+- "details" should include key requirements, work mode, location, seniority, or technologies only if they appear in the text.
+- Return only valid JSON.
+- No markdown.
+- No comments.
+- No extra text.
+
+JSON shape:
+{
+  "title": "",
+  "company": "",
+  "details": ""
+}
+
+Input text:
+${normalizedText}
+`;
+
+  if (!normalizedText) {
+    return res.status(400).json({ error: "Empty request" });
+  }
+
+  try {
+    const response = await client.responses.create({
+      model: "gpt-4.1-mini",
+      input: prompt,
+    });
+
+    const answerAi = response.output_text;
+
+    if (!answerAi.trim()) {
+      return res.status(500).json({
+        error: "Failed to generate suggestion",
+      });
+    }
+
+    let extractedJob;
+
+    try {
+      extractedJob = JSON.parse(answerAi);
+    } catch (error) {
+      return res.status(500).json({
+        error: "AI returned invalid JSON",
+      });
+    }
+
+    return res.json({ job: extractedJob });
+  } catch (error) {
+    console.error("OpenAI error:", error);
+    return res.status(500).json({
+      error: "Failed to generate answer",
     });
   }
 });
