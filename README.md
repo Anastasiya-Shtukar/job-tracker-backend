@@ -2,354 +2,200 @@
 
 Backend API for the AI Job Tracker portfolio project.
 
-This service is built with **Node.js + Express**, uses **PostgreSQL** for data storage, and exposes a small REST API for managing job applications. It also includes an AI endpoint that rewrites job details using the OpenAI API.
+Built with **Node.js + Express**, using **PostgreSQL** for persistence and **OpenAI API** for AI-assisted features.
+
+---
 
 ## Tech stack
 
 - Node.js
 - Express
 - PostgreSQL
-- `pg`
+- pg
 - OpenAI API
 - dotenv
 - cors
 
+---
+
 ## What this backend does
 
-- fetches all jobs from the database
-- creates a new job entry
-- updates an existing job
-- deletes a job
-- validates incoming data
-- connects to PostgreSQL through `DATABASE_URL`
-- calls OpenAI through a backend proxy so the frontend never sees the API key
+- CRUD operations for job tracking
+- input validation and normalization
+- unique constraint on job URLs
+- AI-powered endpoints:
+  - job details suggestion
+  - job data extraction (text or URL)
+- safe OpenAI integration via backend proxy
 
-## Project structure
-
-```text
-job-tracker-backend/
-├── index.js
-├── package.json
-└── .gitignore
-```
-
-## Environment variables
-
-Create a `.env` file in the project root.
-
-Example:
-
-```env
-DATABASE_URL=your_neon_postgres_connection_string
-OPENAI_API_KEY=your_openai_api_key
-```
-
-### Required variables
-
-- `DATABASE_URL` - connection string for your Neon PostgreSQL database
-- `OPENAI_API_KEY` - API key used for the AI suggestion endpoint
+---
 
 ## Database
 
-This project uses PostgreSQL.
+### Schema
 
-Main table: `jobs`
+    CREATE TABLE jobs (
+      id SERIAL PRIMARY KEY,
+      title TEXT NOT NULL,
+      company TEXT NOT NULL,
+      status TEXT NOT NULL,
+      details TEXT,
+      job_url TEXT NOT NULL UNIQUE,
+      created_at TIMESTAMP DEFAULT NOW(),
+      updated_at TIMESTAMP DEFAULT NOW()
+    );
 
-Recommended schema:
+### Notes
 
-```sql
-CREATE TABLE jobs (
-  id SERIAL PRIMARY KEY,
-  title TEXT NOT NULL,
-  company TEXT NOT NULL,
-  status TEXT NOT NULL,
-  details TEXT,
-  created_at TIMESTAMP DEFAULT NOW(),
-  updated_at TIMESTAMP DEFAULT NOW()
-);
-```
+- job_url is required and must be unique
+- duplicate job entries are prevented at the database level
+- strings are normalized before saving
+- updated_at is updated on every modification
 
-### Notes about the schema
-
-- `id` is the unique identifier for each job
-- `title` is required
-- `company` is required
-- `status` should contain one of these values:
-  - `applied`
-  - `interview`
-  - `rejected`
-- `details` is optional from the UI perspective, but the backend normalizes it to a string
-- `updated_at` is refreshed on update requests
+---
 
 ## API endpoints
 
-### Health check
+### GET /jobs
 
-#### `GET /`
-
-Returns a simple message to confirm the API is running.
-
-Response:
-
-```json
-"API is running"
-```
+Returns all jobs.
 
 ---
 
-### Get all jobs
+### POST /jobs
 
-#### `GET /jobs`
-
-Returns all rows from the `jobs` table.
-
-Example response:
-
-```json
-[
-  {
-    "id": 1,
-    "title": "Frontend Developer",
-    "company": "Acme",
-    "status": "applied",
-    "details": "React, REST API, remote",
-    "created_at": "2026-04-20T10:00:00.000Z",
-    "updated_at": "2026-04-20T10:00:00.000Z"
-  }
-]
-```
-
----
-
-### Create a new job
-
-#### `POST /jobs`
-
-Request body:
-
-```json
-{
-  "title": "Frontend Developer",
-  "company": "Acme",
-  "status": "applied",
-  "details": "React, REST API, remote"
-}
-```
+Creates a new job.
 
 Rules:
 
-- `title` is required
-- `company` is required
-- `status` must be one of: `applied`, `interview`, `rejected`
-- if `status` is missing, the backend uses `applied`
-- strings are trimmed before saving
+- title, company, and job_url are required
+- status defaults to applied
+- job_url must be unique
 
-Success response:
+Errors:
 
-```json
-{
-  "job": {
-    "id": 1,
-    "title": "Frontend Developer",
-    "company": "Acme",
-    "status": "applied",
-    "details": "React, REST API, remote",
-    "created_at": "2026-04-20T10:00:00.000Z",
-    "updated_at": "2026-04-20T10:00:00.000Z"
-  }
-}
-```
+- 400 invalid input
+- 409 duplicate job URL
+- 500 server error
 
 ---
 
-### Delete a job
+### PATCH /jobs/:id
 
-#### `DELETE /jobs/:id`
+Updates job fields:
 
-Deletes a job by id.
-
-Success response:
-
-```json
-{
-  "message": "Job deleted"
-}
-```
-
-Possible errors:
-
-- `404` if the job does not exist
-- `500` if deletion fails
+- title
+- company
+- status
+- details
 
 ---
 
-### Update a job
+### DELETE /jobs/:id
 
-#### `PATCH /jobs/:id`
-
-Allows partial updates.
-
-Allowed fields:
-
-- `title`
-- `company`
-- `status`
-- `details`
-
-Example request body:
-
-```json
-{
-  "status": "interview"
-}
-```
-
-Example request body:
-
-```json
-{
-  "title": "Frontend Engineer",
-  "company": "Acme",
-  "details": "React, accessibility, API integration"
-}
-```
-
-Rules:
-
-- request body cannot be empty
-- only allowed fields can be updated
-- `status` must be one of: `applied`, `interview`, `rejected`
-- `title` and `company` must be non-empty strings if provided
-- `details` must be a string if provided
-- strings are trimmed before saving
-- `updated_at` is updated automatically
-
-Possible errors:
-
-- `400` invalid request body
-- `404` job not found
-- `500` failed to update job
+Deletes a job.
 
 ---
 
-### AI suggestion endpoint
+## AI endpoints
 
-#### `POST /ai/suggest-details`
+### POST /ai/suggest-details
 
-This endpoint rewrites and shortens job details using the OpenAI API.
+Rewrites and shortens job details using OpenAI.
 
-Request body:
+---
 
-```json
-{
-  "details": "Long job description or copied vacancy notes here"
-}
-```
+### POST /ai/extract-job
 
-What it does:
+Extracts structured job data from:
 
-- validates that `details` is not empty
-- sends the text to OpenAI
-- asks the model to rewrite and shorten it
-- returns a shorter suggestion for the frontend UI
+- pasted job text
+- or job URL (best-effort)
 
-Success response:
+### Request
 
-```json
-{
-  "suggestion": "Frontend role focused on React, API integration, and teamwork in a remote environment."
-}
-```
+    {
+      "text": "optional",
+      "url": "optional"
+    }
 
-Possible errors:
+### Rules
 
-- `400` empty request
-- `500` failed to generate suggestion
+- at least one of text or url must be provided
+- if only URL is provided:
+  - backend attempts to fetch page content
+  - HTML is cleaned before sending to AI
+- user always reviews extracted data before saving
 
-## Validation rules
+### Response
 
-The backend currently supports these status values:
+    {
+      "job": {
+        "title": "",
+        "company": "",
+        "details": ""
+      }
+    }
 
-- `applied`
-- `interview`
-- `rejected`
+---
 
-Incoming strings are normalized with `.trim()` before being saved.
+## Limitations of URL extraction
 
-## How to run locally
+URL extraction is best-effort only.
 
-### 1. Install dependencies
+Limitations:
 
-```bash
-npm install
-```
+- some websites block server-side requests
+- some pages require JavaScript rendering
+- some platforms (e.g. LinkedIn) restrict access
+- fetched HTML may not contain meaningful content
 
-### 2. Add environment variables
+Because of this:
 
-Create a `.env` file:
+- extraction may fail
+- user can always paste job text manually
 
-```env
-DATABASE_URL=your_neon_postgres_connection_string
-OPENAI_API_KEY=your_openai_api_key
-```
+---
 
-### 3. Make sure the database table exists
+## Environment variables
 
-Run the `CREATE TABLE jobs (...)` SQL statement in Neon.
+    DATABASE_URL=your_postgres_connection
+    OPENAI_API_KEY=your_openai_key
 
-### 4. Start the server
+---
 
-```bash
-node index.js
-```
+## Running locally
 
-The server runs on:
+    npm install
+    node index.js
 
-```text
-http://localhost:3000
-```
+Server runs on:
 
-## Frontend connection
+    http://localhost:3000
 
-The frontend should use this backend through:
+---
 
-```env
-VITE_API_URL=http://localhost:3000
-```
+## Deployment
 
-For production deployment, replace it with your deployed backend URL.
+- Backend: Render / Railway
+- Database: Neon
 
-## Deployment notes
-
-Recommended setup:
-
-- **Frontend**: Vercel
-- **Backend**: Render
-- **Database**: Neon PostgreSQL
-
-Why this setup:
-
-- Vercel is a natural fit for the React frontend
-- Render or Railway are simpler for a standard Express server
-- Neon works well as a managed PostgreSQL database
+---
 
 ## Current limitations
 
 - no authentication yet
-- no pagination yet
-- no rate limiting yet
-- no test suite yet
-- no migrations yet
-- AI feature depends on a valid OpenAI API key and available credits
+- no pagination
+- no rate limiting
+- no migrations system (manual SQL)
+- limited scraping capability
+
+---
 
 ## Portfolio context
 
-This is part of the **AI Job Tracker** project built as a portfolio application.
+This backend is part of a fullstack project focused on:
 
-The goal is not just CRUD, but a realistic product that shows:
-
-- frontend and backend integration
-- async UI states
-- backend validation
-- database persistence
-- safe AI integration through a server-side proxy
+- real product behavior
+- safe backend design
+- AI integration with clear UX boundaries

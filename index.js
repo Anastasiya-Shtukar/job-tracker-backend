@@ -77,6 +77,13 @@ RETURNING *;`,
     res.status(201).json({ job: result.rows[0] });
   } catch (error) {
     console.error(error);
+
+    if (error.code === "23505") {
+      return res.status(409).json({
+        error: "This job offer already exists",
+      });
+    }
+
     res.status(500).json({ error: "Failed to add job" });
   }
 });
@@ -217,10 +224,59 @@ ${normalizedDetails}`,
 });
 
 app.post("/ai/extract-job", async (req, res) => {
-  const { text } = req.body;
-  console.log(text);
+  const { text, url } = req.body;
   const normalizedText = normalizeString(text);
-  console.log(normalizedText);
+  const normalizedUrl = normalizeUrl(url);
+
+  if (!normalizedText && !normalizedUrl) {
+    return res
+      .status(400)
+      .json({ error: "Job URL or job posting text is required" });
+  }
+
+  let sourceText = normalizedText;
+
+  if (!sourceText && normalizedUrl) {
+    let pageResponse;
+
+    try {
+      pageResponse = await fetch(normalizedUrl, {
+        headers: {
+          "User-Agent":
+            "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0 Safari/537.36",
+          Accept:
+            "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+          "Accept-Language": "pl-PL,pl;q=0.9,en;q=0.8",
+        },
+      });
+    } catch (error) {
+      return res.status(400).json({
+        error: "Couldn’t read this URL. Paste the job posting text manually.",
+      });
+    }
+
+    if (!pageResponse.ok) {
+      return res.status(400).json({
+        error: "Couldn’t read this URL. Paste the job posting text manually.",
+      });
+    }
+
+    const html = await pageResponse.text();
+
+    sourceText = html
+      .replace(/<script[\s\S]*?<\/script>/gi, "")
+      .replace(/<style[\s\S]*?<\/style>/gi, "")
+      .replace(/<[^>]+>/g, " ")
+      .replace(/\s+/g, " ")
+      .trim();
+
+    if (sourceText.length < 300) {
+      return res.status(400).json({
+        error: "Couldn’t read this URL. Paste the job posting text manually.",
+      });
+    }
+  }
+
   const prompt = `
 You are extracting job posting data for a job tracking app.
 
@@ -247,12 +303,8 @@ JSON shape:
 }
 
 Input text:
-${normalizedText}
+${sourceText.slice(0, 12000)}
 `;
-
-  if (!normalizedText) {
-    return res.status(400).json({ error: "Empty request" });
-  }
 
   try {
     const response = await client.responses.create({
