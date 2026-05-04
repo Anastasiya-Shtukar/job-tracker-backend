@@ -3,6 +3,8 @@ const cors = require("cors");
 require("dotenv").config();
 const OpenAI = require("openai");
 const pool = require("./db.js");
+const bcrypt = require("bcrypt");
+const jwt = require("jsonwebtoken");
 
 const app = express();
 
@@ -27,13 +29,39 @@ const normalizeUrl = (value) => {
   return `https://${trimmed}`;
 };
 
+const authenticateUser = (req, res, next) => {
+  const authHeader = req.headers.authorization;
+
+  if (!authHeader || !authHeader.startsWith("Bearer ")) {
+    return res.status(401).json({ error: "Unauthorized" });
+  }
+
+  const token = authHeader.split(" ")[1];
+
+  try {
+    const decoded = jwt.verify(token, process.env.JWT_SECRET);
+
+    req.userId = decoded.userId;
+
+    next();
+  } catch (error) {
+    return res.status(401).json({ error: "Unauthorized" });
+  }
+};
+
 app.get("/", (req, res) => {
   res.send("API is running");
 });
 
-app.get("/jobs", async (req, res) => {
+app.get("/jobs", authenticateUser, async (req, res) => {
   try {
-    const result = await pool.query("SELECT * FROM jobs");
+    const result = await pool.query(
+      `SELECT * FROM jobs
+   WHERE user_id = $1
+   ORDER BY created_at DESC;`,
+      [req.userId],
+    );
+    console.log(req.userId);
     res.json(result.rows);
   } catch (error) {
     console.error(error);
@@ -41,8 +69,9 @@ app.get("/jobs", async (req, res) => {
   }
 });
 
-app.post("/jobs", async (req, res) => {
+app.post("/jobs", authenticateUser, async (req, res) => {
   const { title, company, status, details, job_url } = req.body;
+  console.log("POST /jobs userId:", req.userId);
 
   const normalizedCompany = normalizeString(company);
   const normalizedDetails = normalizeString(details);
@@ -63,15 +92,16 @@ app.post("/jobs", async (req, res) => {
 
   try {
     const result = await pool.query(
-      `INSERT INTO jobs (title, company, status, details, job_url)
-VALUES ($1, $2, $3, $4, $5)
-RETURNING *;`,
+      `INSERT INTO jobs (title, company, status, details, job_url, user_id)
+VALUES ($1, $2, $3, $4, $5, $6)
+RETURNING id, title, company, status, details, job_url, created_at, updated_at;`,
       [
         normalizedTitle,
         normalizedCompany,
         finalStatus,
         normalizedDetails,
         finalUrl,
+        req.userId,
       ],
     );
     res.status(201).json({ job: result.rows[0] });
@@ -88,15 +118,15 @@ RETURNING *;`,
   }
 });
 
-app.delete("/jobs/:id", async (req, res) => {
+app.delete("/jobs/:id", authenticateUser, async (req, res) => {
   const id = Number(req.params.id);
 
   try {
     const result = await pool.query(
       `DELETE FROM jobs
-WHERE id = $1
-RETURNING *;`,
-      [id],
+WHERE id = $1 AND user_id = $2
+RETURNING id, title, company, status, details, job_url, created_at, updated_at;`,
+      [id, req.userId],
     );
 
     if (result.rows.length === 0) {
@@ -109,7 +139,7 @@ RETURNING *;`,
   }
 });
 
-app.patch("/jobs/:id", async (req, res) => {
+app.patch("/jobs/:id", authenticateUser, async (req, res) => {
   const id = Number(req.params.id);
   const updates = req.body;
   const incomingFields = Object.keys(updates);
@@ -171,9 +201,9 @@ app.patch("/jobs/:id", async (req, res) => {
       `UPDATE jobs
 SET ${setClauses.join(", ")},
     updated_at = NOW()
-WHERE id = $${values.length + 1}
-RETURNING *;`,
-      [...values, id],
+WHERE id = $${values.length + 1} AND user_id = $${values.length + 2}
+RETURNING id, title, company, status, details, job_url, created_at, updated_at;`,
+      [...values, id, req.userId],
     );
 
     if (result.rows.length === 0) {
@@ -336,6 +366,92 @@ ${sourceText.slice(0, 12000)}
     return res.status(500).json({
       error: "Failed to generate answer",
     });
+  }
+});
+
+app.post("/auth/register", async (req, res) => {
+  const { email, password } = req.body;
+  const normalisedEmail = normalizeString(email);
+  const normalizedPassword = normalizeString(password);
+
+  if (!normalisedEmail || !normalizedPassword) {
+    return res.status(400).json({ error: "Email and password is required" });
+  }
+
+  try {
+    const hashedPassword = await bcrypt.hash(normalizedPassword, 10);
+
+    const result = await pool.query(
+      `INSERT INTO users (email, password_hash)
+VALUES ($1, $2)
+RETURNING id, email;`,
+      [normalisedEmail, hashedPassword],
+    );
+    const user = result.rows[0];
+    res.status(201).json({
+      id: user.id,
+      email: user.email,
+    });
+  } catch (error) {
+    console.error(error);
+
+    if (error.code === "23505") {
+      return res.status(409).json({
+        error: "User with this email already exists",
+      });
+    }
+
+    res.status(500).json({ error: "Failed to register" });
+  }
+});
+
+app.post("/auth/login", async (req, res) => {
+  const { email, password } = req.body;
+  const normalisedEmail = normalizeString(email);
+  const normalizedPassword = normalizeString(password);
+
+  if (!normalisedEmail || !normalizedPassword) {
+    return res.status(400).json({ error: "Email and password is required" });
+  }
+
+  try {
+    const result = await pool.query(
+      `SELECT id, email, password_hash
+FROM users
+WHERE email = $1;`,
+      [normalisedEmail],
+    );
+
+    const user = result.rows[0];
+
+    if (!user) {
+      return res.status(401).json({
+        error: "Invalid email or password",
+      });
+    }
+
+    const isPasswordValid = await bcrypt.compare(
+      normalizedPassword,
+      user.password_hash,
+    );
+
+    if (!isPasswordValid) {
+      return res.status(401).json({
+        error: "Invalid email or password",
+      });
+    }
+
+    const token = jwt.sign({ userId: user.id }, process.env.JWT_SECRET, {
+      expiresIn: "7d",
+    });
+
+    res.status(201).json({
+      user: { id: user.id, email: user.email },
+      token,
+    });
+  } catch (error) {
+    console.error(error);
+    res.status(500).json({ error: "Failed to login" });
   }
 });
 
