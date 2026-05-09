@@ -2,200 +2,343 @@
 
 Backend API for the AI Job Tracker portfolio project.
 
-Built with **Node.js + Express**, using **PostgreSQL** for persistence and **OpenAI API** for AI-assisted features.
+Built with **Node.js + Express**, using **PostgreSQL** for persistence, **JWT authentication** for protected user data, and the **OpenAI API** for AI-assisted job tracking features.
 
----
-
-## Tech stack
+## Tech Stack
 
 - Node.js
 - Express
 - PostgreSQL
 - pg
+- bcrypt
+- jsonwebtoken
 - OpenAI API
 - dotenv
 - cors
 
----
+## Main Features
 
-## What this backend does
-
-- CRUD operations for job tracking
-- input validation and normalization
-- unique constraint on job URLs
+- User registration
+- User login
+- JWT-based authentication
+- Protected job CRUD endpoints
+- Per-user job isolation through `user_id`
+- Password hashing with bcrypt
+- Input validation and normalization
+- Unique job URL handling
 - AI-powered endpoints:
   - job details suggestion
-  - job data extraction (text or URL)
-- safe OpenAI integration via backend proxy
-
----
+  - job data extraction from text or URL
+- Safe OpenAI integration through backend proxy
 
 ## Database
 
-### Schema
+### Users table
 
-    CREATE TABLE jobs (
-      id SERIAL PRIMARY KEY,
-      title TEXT NOT NULL,
-      company TEXT NOT NULL,
-      status TEXT NOT NULL,
-      details TEXT,
-      job_url TEXT NOT NULL UNIQUE,
-      created_at TIMESTAMP DEFAULT NOW(),
-      updated_at TIMESTAMP DEFAULT NOW()
-    );
+```sql
+CREATE TABLE users (
+  id SERIAL PRIMARY KEY,
+  email TEXT NOT NULL UNIQUE,
+  password_hash TEXT NOT NULL,
+  created_at TIMESTAMP DEFAULT NOW()
+);
+```
 
-### Notes
+### Jobs table
 
-- job_url is required and must be unique
-- duplicate job entries are prevented at the database level
-- strings are normalized before saving
-- updated_at is updated on every modification
+```sql
+CREATE TABLE jobs (
+  id SERIAL PRIMARY KEY,
+  title TEXT NOT NULL,
+  company TEXT NOT NULL,
+  status TEXT NOT NULL,
+  details TEXT,
+  job_url TEXT NOT NULL UNIQUE,
+  user_id INTEGER NOT NULL REFERENCES users(id),
+  created_at TIMESTAMP DEFAULT NOW(),
+  updated_at TIMESTAMP DEFAULT NOW()
+);
+```
+
+## Migration Notes
+
+Existing jobs were assigned to a temporary test user during the authentication migration:
+
+```text
+create users table
+→ insert temporary user
+→ add user_id to jobs
+→ assign existing jobs to temporary user
+→ make user_id required
+```
+
+This keeps old job data valid after introducing authentication.
+
+## Authentication
+
+### POST /auth/register
+
+Creates a new user.
+
+Request:
+
+```json
+{
+  "email": "user@example.com",
+  "password": "password"
+}
+```
+
+Behavior:
+
+- validates required fields
+- hashes password with bcrypt
+- stores email and password hash
+- returns created user without password hash
+
+Errors:
+
+- `400` missing email or password
+- `409` user already exists
+- `500` server error
 
 ---
 
-## API endpoints
+### POST /auth/login
+
+Logs in an existing user.
+
+Request:
+
+```json
+{
+  "email": "user@example.com",
+  "password": "password"
+}
+```
+
+Behavior:
+
+- validates credentials
+- compares password with stored hash
+- signs JWT with user id
+- returns user and token
+
+Response:
+
+```json
+{
+  "user": {
+    "id": 1,
+    "email": "user@example.com"
+  },
+  "token": "jwt-token"
+}
+```
+
+Errors:
+
+- `400` missing email or password
+- `401` invalid credentials
+- `500` server error
+
+---
+
+### GET /auth/me
+
+Returns the current authenticated user.
+
+Requires:
+
+```http
+Authorization: Bearer <token>
+```
+
+Errors:
+
+- `401` missing or invalid token
+- `404` user not found
+- `500` server error
+
+## Protected Job Endpoints
+
+All job endpoints require:
+
+```http
+Authorization: Bearer <token>
+```
+
+The backend reads the user id from the JWT and applies it to all job queries.
+
+---
 
 ### GET /jobs
 
-Returns all jobs.
+Returns jobs for the authenticated user only.
 
 ---
 
 ### POST /jobs
 
-Creates a new job.
+Creates a new job for the authenticated user.
 
 Rules:
 
-- title, company, and job_url are required
-- status defaults to applied
-- job_url must be unique
-
-Errors:
-
-- 400 invalid input
-- 409 duplicate job URL
-- 500 server error
+- `title`, `company`, and `job_url` are required
+- `status` defaults to `applied`
+- `job_url` is normalized
+- duplicate job URLs return a conflict error
 
 ---
 
 ### PATCH /jobs/:id
 
-Updates job fields:
+Updates a job only if it belongs to the authenticated user.
 
-- title
-- company
-- status
-- details
+Allowed fields:
+
+- `title`
+- `company`
+- `status`
+- `details`
+
+Rules:
+
+- unknown fields are rejected
+- invalid statuses are rejected
+- empty required fields are rejected
+- `updated_at` is refreshed on update
 
 ---
 
 ### DELETE /jobs/:id
 
-Deletes a job.
+Deletes a job only if it belongs to the authenticated user.
 
----
-
-## AI endpoints
+## AI Endpoints
 
 ### POST /ai/suggest-details
 
 Rewrites and shortens job details using OpenAI.
 
+Request:
+
+```json
+{
+  "details": "Long job notes..."
+}
+```
+
+Response:
+
+```json
+{
+  "suggestion": "Short improved version..."
+}
+```
+
 ---
 
 ### POST /ai/extract-job
 
-Extracts structured job data from:
+Extracts structured job data from pasted text or URL.
 
-- pasted job text
-- or job URL (best-effort)
+Request:
 
-### Request
+```json
+{
+  "text": "optional pasted job text",
+  "url": "optional job URL"
+}
+```
 
-    {
-      "text": "optional",
-      "url": "optional"
-    }
+Response:
 
-### Rules
+```json
+{
+  "job": {
+    "title": "",
+    "company": "",
+    "details": ""
+  }
+}
+```
 
-- at least one of text or url must be provided
-- if only URL is provided:
-  - backend attempts to fetch page content
-  - HTML is cleaned before sending to AI
-- user always reviews extracted data before saving
+Rules:
 
-### Response
+- at least one of `text` or `url` is required
+- if only URL is provided, backend attempts to fetch and clean HTML
+- OpenAI must return valid JSON
+- missing or unclear fields are returned as empty strings
 
-    {
-      "job": {
-        "title": "",
-        "company": "",
-        "details": ""
-      }
-    }
+## Environment Variables
 
----
+```env
+DATABASE_URL=your_postgres_connection_string
+OPENAI_API_KEY=your_openai_api_key
+JWT_SECRET=your_jwt_secret
+```
 
-## Limitations of URL extraction
+## Local Setup
 
-URL extraction is best-effort only.
+### 1. Install dependencies
 
-Limitations:
+```bash
+npm install
+```
 
-- some websites block server-side requests
-- some pages require JavaScript rendering
-- some platforms (e.g. LinkedIn) restrict access
-- fetched HTML may not contain meaningful content
+### 2. Create `.env`
 
-Because of this:
+```env
+DATABASE_URL=postgresql://user:password@localhost:5432/job_tracker
+OPENAI_API_KEY=your_openai_api_key
+JWT_SECRET=your_jwt_secret
+```
 
-- extraction may fail
-- user can always paste job text manually
+### 3. Run database SQL
 
----
+Run the initial schema and migration SQL files in order:
 
-## Environment variables
+```text
+init.sql
+002_add_users_and_user_id.sql
+```
 
-    DATABASE_URL=your_postgres_connection
-    OPENAI_API_KEY=your_openai_key
+### 4. Start server
 
----
-
-## Running locally
-
-    npm install
-    node index.js
+```bash
+node index.js
+```
 
 Server runs on:
 
-    http://localhost:3000
-
----
+```text
+http://localhost:3000
+```
 
 ## Deployment
 
 - Backend: Render / Railway
-- Database: Neon
+- Database: Neon PostgreSQL
 
----
+Required production environment variables:
 
-## Current limitations
+```env
+DATABASE_URL=production_database_url
+OPENAI_API_KEY=production_openai_key
+JWT_SECRET=strong_production_secret
+```
 
-- no authentication yet
-- no pagination
-- no rate limiting
-- no migrations system (manual SQL)
-- limited scraping capability
+## Current Limitations
 
----
+- No password reset flow.
+- No email verification.
+- No refresh tokens.
+- No rate limiting.
+- No pagination.
+- No formal migration tool yet, only manual SQL files.
+- AI URL extraction is best-effort because many sites block server-side requests or require JavaScript rendering.
 
-## Portfolio context
+## Portfolio Context
 
-This backend is part of a fullstack project focused on:
-
-- real product behavior
-- safe backend design
-- AI integration with clear UX boundaries
+This backend demonstrates practical fullstack behavior: authentication, protected data access, relational database design, backend validation, safe AI integration, and predictable API responses.
