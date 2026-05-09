@@ -61,7 +61,7 @@ app.get("/jobs", authenticateUser, async (req, res) => {
    ORDER BY created_at DESC;`,
       [req.userId],
     );
-    console.log(req.userId);
+
     res.json(result.rows);
   } catch (error) {
     console.error(error);
@@ -452,6 +452,28 @@ WHERE email = $1;`,
   } catch (error) {
     console.error(error);
     res.status(500).json({ error: "Failed to login" });
+  }
+});
+
+app.get("/auth/me", authenticateUser, async (req, res) => {
+  try {
+    const result = await pool.query(
+      `SELECT id, email
+       FROM users
+       WHERE id = $1;`,
+      [req.userId],
+    );
+
+    const user = result.rows[0];
+
+    if (!user) {
+      return res.status(404).json({ error: "User not found" });
+    }
+
+    res.json({ user });
+  } catch (error) {
+    console.error(error);
+    res.status(500).json({ error: "Failed to fetch user" });
   }
 });
 
