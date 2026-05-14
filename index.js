@@ -219,7 +219,7 @@ const client = new OpenAI({
   apiKey: process.env.OPENAI_API_KEY,
 });
 
-app.post("/ai/suggest-details", async (req, res) => {
+app.post("/ai/suggest-details", authenticateUser, async (req, res) => {
   const { details } = req.body;
   const normalizedDetails = normalizeString(details);
   if (!normalizedDetails) {
@@ -253,7 +253,7 @@ ${normalizedDetails}`,
   }
 });
 
-app.post("/ai/extract-job", async (req, res) => {
+app.post("/ai/extract-job", authenticateUser, async (req, res) => {
   const { text, url } = req.body;
   const normalizedText = normalizeString(text);
   const normalizedUrl = normalizeUrl(url);
@@ -371,11 +371,17 @@ ${sourceText.slice(0, 12000)}
 
 app.post("/auth/register", async (req, res) => {
   const { email, password } = req.body;
-  const normalisedEmail = normalizeString(email);
+  const normalizedEmail = normalizeString(email);
   const normalizedPassword = normalizeString(password);
 
-  if (!normalisedEmail || !normalizedPassword) {
+  if (!normalizedEmail || !normalizedPassword) {
     return res.status(400).json({ error: "Email and password is required" });
+  }
+
+  if (normalizedPassword.length < 8) {
+    return res.status(400).json({
+      error: "Password must be at least 8 characters",
+    });
   }
 
   try {
@@ -385,10 +391,10 @@ app.post("/auth/register", async (req, res) => {
       `INSERT INTO users (email, password_hash)
 VALUES ($1, $2)
 RETURNING id, email;`,
-      [normalisedEmail, hashedPassword],
+      [normalizedEmail, hashedPassword],
     );
     const user = result.rows[0];
-    res.status(201).json({
+    res.status(200).json({
       id: user.id,
       email: user.email,
     });
@@ -445,7 +451,7 @@ WHERE email = $1;`,
       expiresIn: "7d",
     });
 
-    res.status(201).json({
+    res.status(200).json({
       user: { id: user.id, email: user.email },
       token,
     });
