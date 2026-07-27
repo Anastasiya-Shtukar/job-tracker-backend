@@ -1,14 +1,21 @@
 {
   "name": "job-tracker-backend",
   "version": "1.0.0",
+  "description": "Backend API for the AI Job Tracker application",
   "main": "index.js",
   "scripts": {
-    "test": "echo \"Error: no test specified\" && exit 1"
+    "start": "node index.js",
+    "dev": "node --watch index.js"
   },
-  "keywords": [],
-  "author": "Anastasiya Shtukar <nastasija2409@gmail.com>",
+  "keywords": [
+    "node",
+    "express",
+    "postgresql",
+    "openai",
+    "job-tracker"
+  ],
+  "author": "Anastasiya Shtukar",
   "license": "ISC",
-  "description": "",
   "dependencies": {
     "bcrypt": "^6.0.0",
     "cors": "^2.8.6",
